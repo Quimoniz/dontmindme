@@ -185,7 +185,14 @@ class FloodBot(irc.bot.SingleServerIRCBot):
   def on_welcome(self, c, e):
     c.join(self.channel)
 
+  # the default method causes the bot to crash on my server
+  # Overwriting this is a good idea anyway
+  def get_version(self):
+    return "DontMindMe - Flood Protection Bot 0.1"
+
 def main():
+  print(irc.client.VERSION)
+
   import argparse
 
   parser = argparse.ArgumentParser(description='A basic flood protection bot.')
