@@ -1,0 +1,9 @@
+- Only get active when channel is moderated
+- Check messages for certain keywords
+- Check if a nick is registered and act less strictly in case
+- Ignore channel operators
+- Better blacklisting: 
+  * Blacklist entries expire
+  * /mode +v used by a channel operator removes blacklist entry
+- Collect hostmasks/ip addresses of spammers
+- Collect statistics about chatter behaviour to improve algorithm
