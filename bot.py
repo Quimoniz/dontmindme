@@ -6,6 +6,10 @@ import irc.strings
 import irc.client
 from irc.dict import IRCDict
 
+MIN_SECONDS_BETWEEN_MESSAGES = 4  # minimal delay in seconds two messages should have
+WEBCHAT_MULTIPLIER = 1.5          # additional penalty for webchat users
+MAX_FLOOD_SCORE = 15              # maximum score a client can reach before being punished
+
 class User(object):
   def __init__(self, name, host):
     self.name = name
@@ -27,7 +31,12 @@ class User(object):
 
   def update(self, message):
     # a pause of a few seconds between messages keeps flood_score at 0
-    self.flood_score += (2 + (self.uses_webchat*2) - (time.time() - self.last_message_time))
+    msg_length = len(message)
+    min_message_delay = MIN_SECONDS_BETWEEN_MESSAGES + (self.uses_webchat*2)
+    self.flood_score += (min_message_delay - (time.time() - self.last_message_time))
+
+    # additional penalty for long lines
+    self.flood_score += min(11, (msg_length/80)**1.7)
     self.last_message_time = time.time()
 
     if self.flood_score < 0:
@@ -47,12 +56,13 @@ class User(object):
     # webchat users are more likely to be evil
     # proven by several studies
     if self.uses_webchat:
-      self.flood_score *= 1.5
+      self.flood_score *= WEBCHAT_MULTIPLIER
 
     # TODO check for nazi scum catchphrases
+    # TODO Decrease flood score for registered users
 
     # flood_score threshhold
-    if self.flood_score >= 15:
+    if self.flood_score >= MAX_FLOOD_SCORE:
       self.set_flooding(True)
       self.penalty_count += 1
       
@@ -91,8 +101,9 @@ class Channel(irc.bot.Channel):
       return None
 
 class FloodBot(irc.bot.SingleServerIRCBot):
-  def __init__(self, nickname, server, port=6667):
+  def __init__(self, nickname, server, port, channel):
     irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
+    self.channel = channel
     self.blacklist = set()
 
   # overwrite this to make use of our own Channel class
@@ -172,12 +183,27 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     #c.privmsg(channel_name, "Flood-Score: " + str(user.flood_score))
 
   def on_welcome(self, c, e):
-    c.join("#duerfenwirnicht")
+    c.join(self.channel)
 
 def main():
+  import argparse
+
+  parser = argparse.ArgumentParser(description='A basic flood protection bot.')
+  parser.add_argument("--server", type=str, required=True, help="Address of IRC server")
+  parser.add_argument("--port", type=int, default=6667, help="Port of IRC server")
+  parser.add_argument("--channel", type=str, required=True, help="Channel to join after connecting")
+  parser.add_argument("--nickname", type=str, default="DontMindMe", help="Bot nickname")
+  args = parser.parse_args()
+
+  nick = args.nickname
+  server = args.server
+  port = args.port
+  channel = args.channel
+
+  # disable utf-8 decoding of lines, irc is one messy char encoding place
   irc.client.ServerConnection.buffer_class = irc.client.LineBuffer
-  #bot = FloodBot("test1234_", "irc.freenode.net")
-  bot = FloodBot("DontMindMe", "irc.freenode.net")
+  
+  bot = FloodBot(nick, server, port, channel)
   bot.start()
 
 if __name__ == "__main__":
