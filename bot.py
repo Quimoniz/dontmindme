@@ -9,6 +9,12 @@ from irc.dict import IRCDict
 MIN_SECONDS_BETWEEN_MESSAGES = 4  # minimal delay in seconds two messages should have
 WEBCHAT_MULTIPLIER = 1.5          # additional penalty for webchat users
 MAX_FLOOD_SCORE = 15              # maximum score a client can reach before being punished
+DEBUG = False
+
+def debug_print(msg):
+  global DEBUG
+  if DEBUG:
+    print(msg)
 
 class User(object):
   def __init__(self, name, host):
@@ -145,9 +151,9 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     if e.source.host not in self.blacklist:
       # auto voice newcomers
       c.mode(channel, "+v " + nick)
-      print("'" + e.source.nick + "' gets voiced!")
+      debug_print("'" + e.source.nick + "' gets voiced!")
     else:
-      print("'" + e.source.nick + "' is already blacklisted, no voice for you!")
+      debug_print("'" + e.source.nick + "' is already blacklisted, no voice for you!")
 
   def on_pubmsg(self, c, e):
     channel_name = e.target
@@ -160,8 +166,11 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     channel = self.channels[channel_name]
     user = channel.get_user(nick)
 
+    # this should actually never happen
+    # but it does on servers with specific channel owner mode ("~")
+    # this probably is a bug in python-irc
     if user == None:
-      print("Unknown user: '" + nick + "'. I'm scared!")
+      debug_print("Unknown user: '" + nick + "'. I'm scared!")
       return
 
     message = e.arguments[0].split(":", 1)
@@ -173,8 +182,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
 
     # user has been found flooding
     if user.flooding:
-      #c.privmsg(channel_name, "Stop spamming, you idiot (" + str(user.flood_score) + ")")
-      print("User '" + user.name + "' is flooding!")
+      debug_print("User '" + user.name + "' is flooding!")
       c.mode(channel_name, "-v " + nick)
       self.blacklist.add(e.source.host)
       
@@ -191,25 +199,28 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     return "DontMindMe - Flood Protection Bot 0.1"
 
 def main():
-  print(irc.client.VERSION)
-
+  global DEBUG
   import argparse
 
   parser = argparse.ArgumentParser(description='A basic flood protection bot.')
-  parser.add_argument("--server", type=str, required=True, help="Address of IRC server")
-  parser.add_argument("--port", type=int, default=6667, help="Port of IRC server")
-  parser.add_argument("--channel", type=str, required=True, help="Channel to join after connecting")
-  parser.add_argument("--nickname", type=str, default="DontMindMe", help="Bot nickname")
+  parser.add_argument("--server", '-s', type=str, required=True, help="Address of IRC server")
+  parser.add_argument("--port", '-p', type=int, default=6667, help="Port of IRC server")
+  parser.add_argument("--channel", '-c', type=str, required=True, help="Channel to join after connecting")
+  parser.add_argument("--nickname", '-n', type=str, default="DontMindMe", help="Bot nickname")
+  parser.add_argument("--debug", '-d', action='store_true', help="Print debug messages")
   args = parser.parse_args()
 
   nick = args.nickname
   server = args.server
   port = args.port
   channel = args.channel
+  DEBUG = args.debug
 
   # disable utf-8 decoding of lines, irc is one messy char encoding place
   irc.client.ServerConnection.buffer_class = irc.client.LineBuffer
-  
+ 
+  print("Starting up flood protection ...")
+  debug_print("Server: " + server + ":" + str(port) + ", Channel: " + channel + ", Nickname: " + nick)
   bot = FloodBot(nick, server, port, channel)
   bot.start()
 
