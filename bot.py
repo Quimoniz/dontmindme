@@ -1,6 +1,6 @@
 #!/usr/bin/env python2.7
 
-import time
+import time, datetime
 import irc.bot
 import irc.strings
 import irc.client
@@ -14,7 +14,8 @@ DEBUG = False
 def debug_print(msg):
   global DEBUG
   if DEBUG:
-    print(msg)
+    now = datetime.datetime.now()
+    print("[" + now.strftime("%d-%m-%Y %H:%M:%S") + "] " + msg)
 
 class User(object):
   def __init__(self, name, host):
@@ -111,6 +112,15 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
     self.channel = channel
     self.blacklist = set()
+    self.whitelist = set()
+
+  # checks if a user is a channel op in one of our channels
+  def is_user_admin(self, nick):
+    for _, channel in self.channels.items():
+      if channel.is_oper(nick):
+        return True
+
+    return False
 
   # overwrite this to make use of our own Channel class
   def _on_join(self, c, e):
@@ -178,6 +188,10 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     if user.host == "":
       user.set_host(e.source.host)
 
+    # don't punish whitelisted users
+    if nick.lower() in self.whitelist:
+      return
+    
     user.update(message)
 
     # user has been found flooding
@@ -188,8 +202,79 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       
       user.set_flooding(False)
 
-    #c.privmsg(channel_name, "Flood-Score: " + str(user.flood_score))
+  def on_privmsg(self, c, e):
+    nick = e.source.nick
+    
+    if not self.is_user_admin(nick):
+      debug_print("Unauthorized command by user '" + nick + "'")
+      return False
+    
+    # extract message from arguments, strip and lower
+    msg = e.arguments[0].split(":", 1)[0].strip().lower()
+   
+    # commands have to start with '!'
+    if not msg.startswith("!"):
+      return False
+  
+    debug_print("User '" + nick + "' issued command: '" + msg + "'")
 
+    # command parsing
+    cmd = msg.split(" ")
+
+    # whitelist management
+    if cmd[0] == "!whitelist":
+      if len(cmd) < 2:
+        c.privmsg(nick, "!whitelist add <nick>|del <nick>|list - Manage the bot's whitelist")
+        return
+      
+      if cmd[1] == "list":
+        if len(self.whitelist):
+          c.privmsg(nick, "Whitelist: " + ','.join(self.whitelist))
+        else:
+          c.privmsg(nick, "Whitelist is empty")
+        return
+
+      if len(cmd) < 3:
+        return
+      
+      target = cmd[2]
+      
+      if cmd[1] == "add":
+        self.whitelist.add(target)
+        c.privmsg(nick, "User '" + target + "' added to whitelist")
+      elif cmd[1] == "del":
+        if target in self.whitelist:
+          self.whitelist.remove(target)
+          c.privmsg(nick, "User '" + target + "' removed from whitelist")
+        else:
+          c.privmsg(nick, "User '" + target + "' not on whitelist")
+    
+    # blacklist management
+    elif cmd[0] == "!blacklist":
+      if len(cmd) < 2:
+        c.privmsg(nick, "!blacklist clear - Reset the bot's blacklist")
+        return
+
+      if cmd[1] == "clear":
+        self.blacklist.clear()
+        c.privmsg(nick, "Blacklist cleared")
+
+    # let the bot join a channel
+    elif cmd[0] == "!join":
+      if len(cmd) < 2:
+        c.privmsg(nick, "!join <#channel> - Tell the bot to join a certain channel")
+        return
+      
+      c.join(cmd[1])
+
+    # let the bot leave a channel
+    elif cmd[0] == "!part":
+      if len(cmd) < 2:
+        c.privmsg(nick, "!part <#channel> - Tell the bot to part a certain channel")
+        return
+      
+      c.part(cmd[1])
+ 
   def on_welcome(self, c, e):
     c.join(self.channel)
 
