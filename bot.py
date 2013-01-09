@@ -13,6 +13,7 @@ WEBCHAT_MULTIPLIER = 1.5          # additional penalty for webchat users
 MAX_FLOOD_SCORE = 15              # maximum score a client can reach before being punished
 NICKSERV_PASSWORD = ""            # if the bot's nick is registered, set its NickServ password here
                                   # can and should probably be set using command line arguments
+
 DEBUG = False
 
 def debug_print(msg):
@@ -383,6 +384,7 @@ def main():
   parser.add_argument("--nickname", '-n', type=str, default="DontMindMe", help="Bot nickname")
   parser.add_argument("--debug", '-d', action='store_true', help="Print debug messages")
   parser.add_argument("--ns_password", action='store_true', help="Let the bot ask for the nickserv password on start")
+  parser.add_argument("--secret", type=str, help="Sets the shared admin secret")
   args = parser.parse_args()
 
   nick = args.nickname
@@ -390,6 +392,7 @@ def main():
   port = args.port
   channel = args.channel
   channel_list = args.channel_list
+  secret = args.secret
   DEBUG = args.debug
 
   # handle auto join channels
@@ -423,7 +426,7 @@ def main():
  
   print("Starting up flood protection ...")
   debug_print("Server: " + server + ":" + str(port) + ", Channel: " + ', '.join(channels) + ", Nickname: " + nick)
-  bot = FloodBot(nick, server, port, channels)
+  bot = FloodBot(nick, server, port, channels, secret)
   bot.start()
 
 if __name__ == "__main__":
