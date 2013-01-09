@@ -1,6 +1,8 @@
 #!/usr/bin/env python2.7
 
 import time, datetime
+import getpass
+import os
 import irc.bot
 import irc.strings
 import irc.client
@@ -9,6 +11,8 @@ from irc.dict import IRCDict
 MIN_SECONDS_BETWEEN_MESSAGES = 4  # minimal delay in seconds two messages should have
 WEBCHAT_MULTIPLIER = 1.5          # additional penalty for webchat users
 MAX_FLOOD_SCORE = 15              # maximum score a client can reach before being punished
+NICKSERV_PASSWORD = ""            # if the bot's nick is registered, set its NickServ password here
+                                  # can and should probably be set using command line arguments
 DEBUG = False
 
 def debug_print(msg):
@@ -108,11 +112,13 @@ class Channel(irc.bot.Channel):
       return None
 
 class FloodBot(irc.bot.SingleServerIRCBot):
-  def __init__(self, nickname, server, port, channel):
+  def __init__(self, nickname, server, port, channels):
     irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
-    self.channel = channel
+    self.autojoin_channels = channels
     self.blacklist = set()
     self.whitelist = set()
+
+    debug_print("Auto joining channels: " + ', '.join(self.autojoin_channels))
 
   # checks if a user is a channel op in one of our channels
   def is_user_admin(self, nick):
@@ -121,6 +127,10 @@ class FloodBot(irc.bot.SingleServerIRCBot):
         return True
 
     return False
+
+  def identify(self, c):
+    debug_print("Identifying with NickServ ...")
+    c.privmsg("NickServ", "identify " + NICKSERV_PASSWORD)
 
   # overwrite this to make use of our own Channel class
   def _on_join(self, c, e):
@@ -150,6 +160,9 @@ class FloodBot(irc.bot.SingleServerIRCBot):
         # there's no hostmask on the NAMES list
         self.channels[ch].add_user(nick, "")
 
+  def on_nicknameinuse(self, c, e):
+    c.nick(c.get_nickname() + "_")
+
   def on_join(self, c, e):
     channel = e.target
     nick = e.source.nick
@@ -157,13 +170,6 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     # Don't try to voice ourself
     if nick == c.get_nickname():
       return
-
-    if e.source.host not in self.blacklist:
-      # auto voice newcomers
-      c.mode(channel, "+v " + nick)
-      debug_print("'" + e.source.nick + "' gets voiced!")
-    else:
-      debug_print("'" + e.source.nick + "' is already blacklisted, no voice for you!")
 
   def on_pubmsg(self, c, e):
     channel_name = e.target
@@ -197,14 +203,39 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     # user has been found flooding
     if user.flooding:
       debug_print("User '" + user.name + "' is flooding!")
-      c.mode(channel_name, "-v " + nick)
+      #c.mode(channel_name, "-v " + nick)
+      
+      c.privmsg("ChanServ", "QUIET " + channel_name + " " + user.name)
       self.blacklist.add(e.source.host)
       
       user.set_flooding(False)
 
+  def on_privnotice(self, c, e):
+    nick = e.source.nick
+
+    if nick.lower() != "nickserv":
+      return
+
+    # no NickServ password set means the nick isn't registered
+    if not NICKSERV_PASSWORD:
+      return
+
+    # extract message from arguments, strip and lower
+    msg = e.arguments[0].split(":", 1)[0].strip().lower()
+
+    # check for typical NickServ responses, kinda dirty
+    if "this nickname is registered." in msg:
+      self.identify(c)
+    elif "you are now identified" in msg:
+      debug_print("Succesfully registered!")
+    elif "invalid password" in msg:
+      debug_print("Could not identify with NickServ!")
+    else:
+      debug_print("Unknown message from NickServ: '" + msg + "'")
+
   def on_privmsg(self, c, e):
     nick = e.source.nick
-    
+
     if not self.is_user_admin(nick):
       debug_print("Unauthorized command by user '" + nick + "'")
       return False
@@ -274,9 +305,18 @@ class FloodBot(irc.bot.SingleServerIRCBot):
         return
       
       c.part(cmd[1])
- 
+
+    # change the bot's nick
+    elif cmd[0] == "!nick":
+      if len(cmd) < 2:
+        c.privmsg(nick, "!nick <nickname> - Change the bot's nickname")
+        return
+      
+      c.nick(cmd[1])
+
   def on_welcome(self, c, e):
-    c.join(self.channel)
+    for channel in self.autojoin_channels:
+      c.join(channel)
 
   # the default method causes the bot to crash on my server
   # Overwriting this is a good idea anyway
@@ -285,28 +325,59 @@ class FloodBot(irc.bot.SingleServerIRCBot):
 
 def main():
   global DEBUG
+  global NICKSERV_PASSWORD
   import argparse
+  import sys
 
   parser = argparse.ArgumentParser(description='A basic flood protection bot.')
   parser.add_argument("--server", '-s', type=str, required=True, help="Address of IRC server")
   parser.add_argument("--port", '-p', type=int, default=6667, help="Port of IRC server")
-  parser.add_argument("--channel", '-c', type=str, required=True, help="Channel to join after connecting")
+  parser.add_argument("--channel", '-c', type=str, help="Channel to join after connecting")
+  parser.add_argument("--channel_list", type=str, help="Path to a file that stores a list of channels to join")
   parser.add_argument("--nickname", '-n', type=str, default="DontMindMe", help="Bot nickname")
   parser.add_argument("--debug", '-d', action='store_true', help="Print debug messages")
+  parser.add_argument("--ns_password", action='store_true', help="Let the bot ask for the nickserv password on start")
   args = parser.parse_args()
 
   nick = args.nickname
   server = args.server
   port = args.port
   channel = args.channel
+  channel_list = args.channel_list
   DEBUG = args.debug
+
+  # handle auto join channels
+  # can either be using the command line argument --channel
+  # or by specifying the path to a file containing a list of channels, newline seperated
+  # or both
+  channels = set()
+  if not channel and not channel_list:
+    print("You must define at least one channel to join!")
+    sys.exit(-1)
+
+  if channel_list:
+    if os.path.exists(channel_list):
+      channels = set([line.strip() for line in open(channel_list)])
+    else:
+      print("File '" + channel_list + "' not found!")
+      sys.exit(-1)
+ 
+  if channel:
+    channels.add(channel)
+
+  if len(channels) == 0:
+    print("You must define at least one channel to join!")
+    sys.exit(-1)
+
+  if args.ns_password:
+    NICKSERV_PASSWORD = getpass.getpass("NickServ password: ")
 
   # disable utf-8 decoding of lines, irc is one messy char encoding place
   irc.client.ServerConnection.buffer_class = irc.client.LineBuffer
  
   print("Starting up flood protection ...")
-  debug_print("Server: " + server + ":" + str(port) + ", Channel: " + channel + ", Nickname: " + nick)
-  bot = FloodBot(nick, server, port, channel)
+  debug_print("Server: " + server + ":" + str(port) + ", Channel: " + ', '.join(channels) + ", Nickname: " + nick)
+  bot = FloodBot(nick, server, port, channels)
   bot.start()
 
 if __name__ == "__main__":
