@@ -171,6 +171,10 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     if nick == c.get_nickname():
       return
 
+    # automatically QUIET blacklisted users when they join
+    if e.source.host in self.blacklist:
+      c.privmsg("ChanServ", "QUIET " + channel_name + " " + nick)
+
   def on_pubmsg(self, c, e):
     channel_name = e.target
     
@@ -203,7 +207,6 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     # user has been found flooding
     if user.flooding:
       debug_print("User '" + user.name + "' is flooding!")
-      #c.mode(channel_name, "-v " + nick)
       
       c.privmsg("ChanServ", "QUIET " + channel_name + " " + user.name)
       self.blacklist.add(e.source.host)
