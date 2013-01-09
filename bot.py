@@ -112,18 +112,23 @@ class Channel(irc.bot.Channel):
       return None
 
 class FloodBot(irc.bot.SingleServerIRCBot):
-  def __init__(self, nickname, server, port, channels):
+  def __init__(self, nickname, server, port, channels, admin_secret = ""):
     irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
     self.autojoin_channels = channels
     self.blacklist = set()
     self.whitelist = set()
+    self.admins    = set()
+    self.admin_secret = admin_secret
 
     debug_print("Auto joining channels: " + ', '.join(self.autojoin_channels))
 
   # checks if a user is a channel op in one of our channels
-  def is_user_admin(self, nick):
+  def is_user_admin(self, source):
+    if source in self.admins:
+      return True
+
     for _, channel in self.channels.items():
-      if channel.is_oper(nick):
+      if channel.is_oper(source.nick):
         return True
 
     return False
@@ -216,7 +221,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
   def on_privnotice(self, c, e):
     nick = e.source.nick
 
-    if nick.lower() != "nickserv":
+    if nick.lower() not in ["nickserv", "chanserv"]:
       return
 
     # no NickServ password set means the nick isn't registered
@@ -239,17 +244,31 @@ class FloodBot(irc.bot.SingleServerIRCBot):
   def on_privmsg(self, c, e):
     nick = e.source.nick
 
-    if not self.is_user_admin(nick):
-      debug_print("Unauthorized command by user '" + nick + "'")
-      return False
-    
     # extract message from arguments, strip and lower
     msg = e.arguments[0].split(":", 1)[0].strip().lower()
    
     # commands have to start with '!'
     if not msg.startswith("!"):
+      return
+
+    # allow authorization of non-op admins
+    if msg.startswith("!secret"):
+      if " " not in msg:
+        return
+
+      secret = msg.split(" ")[1]
+
+      if self.admin_secret and secret == self.admin_secret:
+        self.admins.add(e.source)
+        debug_print("Authorized '" + e.source + "' as admin!")
+        c.privmsg(msg, "You have been authorized!")
+      
+      return
+
+    if not self.is_user_admin(e.source):
+      debug_print("Unauthorized command by user '" + nick + "'")
       return False
-  
+    
     debug_print("User '" + nick + "' issued command: '" + msg + "'")
 
     # command parsing
@@ -317,6 +336,30 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       
       c.nick(cmd[1])
 
+    # admin management
+    elif cmd[0] == "!admin":
+      if len(cmd) < 2:
+        c.privmsg(nick, "!admin list|remove <hostmask>|purge - Manage administrators")
+        return
+      
+      if len(cmd) == 2:
+        if cmd[1] == "list":
+          if not len(self.admins):
+            c.privmsg(nick, "There are no administrators!")
+
+          for admin in self.admins:
+            c.privmsg(nick, admin)
+        elif cmd[1] == "purge":
+          c.privmsg("Administrator list purged! Admins will have to log in again next time.")
+          c.admins = set()
+      elif len(cmd) == 3:
+        if cmd[1] == "remove":
+          if cmd[2] in self.admins:
+            c.privmsg("Removing " + cmd[2] + " from admin list ...")
+            self.admins.remove(cmd[2])
+          else:
+            c.privmsg("No such hostmask on the admin list: '" + cmd[2] + "'")
+
   def on_welcome(self, c, e):
     for channel in self.autojoin_channels:
       c.join(channel)
@@ -324,7 +367,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
   # the default method causes the bot to crash on my server
   # Overwriting this is a good idea anyway
   def get_version(self):
-    return "DontMindMe - Flood Protection Bot 0.1"
+    return "DontMindMe - Flood Protection Bot (skyr.at)"
 
 def main():
   global DEBUG
