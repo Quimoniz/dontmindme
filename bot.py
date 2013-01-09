@@ -351,15 +351,15 @@ class FloodBot(irc.bot.SingleServerIRCBot):
           for admin in self.admins:
             c.privmsg(nick, admin)
         elif cmd[1] == "purge":
-          c.privmsg("Administrator list purged! Admins will have to log in again next time.")
+          c.privmsg(nick, "Administrator list purged! Admins will have to log in again next time.")
           c.admins = set()
       elif len(cmd) == 3:
         if cmd[1] == "remove":
           if cmd[2] in self.admins:
-            c.privmsg("Removing " + cmd[2] + " from admin list ...")
+            c.privmsg(nick, "Removing " + cmd[2] + " from admin list ...")
             self.admins.remove(cmd[2])
           else:
-            c.privmsg("No such hostmask on the admin list: '" + cmd[2] + "'")
+            c.privmsg(nick, "No such hostmask on the admin list: '" + cmd[2] + "'")
 
   def on_welcome(self, c, e):
     for channel in self.autojoin_channels:
