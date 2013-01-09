@@ -262,7 +262,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       if self.admin_secret and secret == self.admin_secret:
         self.admins.add(e.source)
         debug_print("Authorized '" + e.source + "' as admin!")
-        c.privmsg(msg, "You have been authorized!")
+        c.privmsg(nick, "You have been authorized!")
       
       return
 
