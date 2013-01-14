@@ -3,6 +3,7 @@
 import time, datetime
 import getpass
 import os
+import logging
 import irc.bot
 import irc.strings
 import irc.client
@@ -13,14 +14,6 @@ WEBCHAT_MULTIPLIER = 1.5          # additional penalty for webchat users
 MAX_FLOOD_SCORE = 15              # maximum score a client can reach before being punished
 NICKSERV_PASSWORD = ""            # if the bot's nick is registered, set its NickServ password here
                                   # can and should probably be set using command line arguments
-
-DEBUG = False
-
-def debug_print(msg):
-  global DEBUG
-  if DEBUG:
-    now = datetime.datetime.now()
-    print("[" + now.strftime("%d-%m-%Y %H:%M:%S") + "] " + msg)
 
 class User(object):
   def __init__(self, name, host):
@@ -113,15 +106,15 @@ class Channel(irc.bot.Channel):
       return None
 
 class FloodBot(irc.bot.SingleServerIRCBot):
-  def __init__(self, nickname, server, port, channels, admin_secret = ""):
+  def __init__(self, logger, nickname, server, port, channels, admin_secret = ""):
     irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
+    self.logger = logger
     self.autojoin_channels = channels
-    self.blacklist = set()
     self.whitelist = set()
     self.admins    = set()
     self.admin_secret = admin_secret
 
-    debug_print("Auto joining channels: " + ', '.join(self.autojoin_channels))
+    self.logger.info("Auto joining channels: " + ', '.join(self.autojoin_channels))
 
   # checks if a user is a channel op in one of our channels
   def is_user_admin(self, source):
@@ -135,7 +128,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     return False
 
   def identify(self, c):
-    debug_print("Identifying with NickServ ...")
+    self.logger.info("Identifying with NickServ ...")
     c.privmsg("NickServ", "identify " + NICKSERV_PASSWORD)
 
   # overwrite this to make use of our own Channel class
@@ -192,7 +185,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     # but it does on servers with specific channel owner mode ("~")
     # this probably is a bug in python-irc
     if user == None:
-      debug_print("Unknown user: '" + nick + "'. I'm scared!")
+      self.logger.error("Unknown user: '" + nick + "'. I'm scared!")
       return
 
     message = e.arguments[0].split(":", 1)
@@ -208,11 +201,8 @@ class FloodBot(irc.bot.SingleServerIRCBot):
 
     # user has been found flooding
     if user.flooding:
-      debug_print("User '" + user.name + "' is flooding!")
-      
+      self.logger.info("User '" + user.name + "' (" + user.host + ") is flooding!")
       c.privmsg("ChanServ", "QUIET " + channel_name + " " + user.name)
-      self.blacklist.add(e.source.host)
-      
       user.set_flooding(False)
 
   def on_privnotice(self, c, e):
@@ -232,17 +222,17 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     if "this nickname is registered." in msg:
       self.identify(c)
     elif "you are now identified" in msg:
-      debug_print("Succesfully registered!")
+      self.logger.info("Succesfully registered!")
     elif "invalid password" in msg:
-      debug_print("Could not identify with NickServ!")
+      self.logger.warning("Could not identify with NickServ!")
     else:
-      debug_print("Unknown message from NickServ: '" + msg + "'")
+      self.logger.info("Unknown message from NickServ: '" + msg + "'")
 
   def on_privmsg(self, c, e):
     nick = e.source.nick
 
-    # extract message from arguments, strip and lower
-    msg = e.arguments[0].split(":", 1)[0].strip().lower()
+    # extract message from arguments, strip
+    msg = e.arguments[0].split(":", 1)[0].strip()
    
     # commands have to start with '!'
     if not msg.startswith("!"):
@@ -257,19 +247,21 @@ class FloodBot(irc.bot.SingleServerIRCBot):
 
       if self.admin_secret and secret == self.admin_secret:
         self.admins.add(e.source)
-        debug_print("Authorized '" + e.source + "' as admin!")
+        self.logger.info("Authorized '" + e.source + "' as admin!")
         c.privmsg(nick, "You have been authorized!")
+      else:
+        self.logger.warning("Unsuccessful login attempt by '" + nick + "' (" + e.source + "): '" + msg + "'")
       
       return
 
     if not self.is_user_admin(e.source):
-      debug_print("Unauthorized command by user '" + nick + "'")
+      self.logger.warning("Unauthorized command by user '" + nick + "' (" + e.source + ")")
       return False
     
-    debug_print("User '" + nick + "' issued command: '" + msg + "'")
+    self.logger.info("User '" + nick + "' (" + e.source + ") issued command: '" + msg + "'")
 
     # command parsing
-    cmd = msg.split(" ")
+    cmd = msg.lower().split(" ")
 
     # whitelist management
     if cmd[0] == "!whitelist":
@@ -299,16 +291,6 @@ class FloodBot(irc.bot.SingleServerIRCBot):
         else:
           c.privmsg(nick, "User '" + target + "' not on whitelist")
     
-    # blacklist management
-    elif cmd[0] == "!blacklist":
-      if len(cmd) < 2:
-        c.privmsg(nick, "!blacklist clear - Reset the bot's blacklist")
-        return
-
-      if cmd[1] == "clear":
-        self.blacklist.clear()
-        c.privmsg(nick, "Blacklist cleared")
-
     # let the bot join a channel
     elif cmd[0] == "!join":
       if len(cmd) < 2:
@@ -367,7 +349,6 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     return "DontMindMe - Flood Protection Bot (skyr.at)"
 
 def main():
-  global DEBUG
   global NICKSERV_PASSWORD
   import argparse
   import sys
@@ -376,11 +357,11 @@ def main():
   parser.add_argument("--server", '-s', type=str, required=True, help="Address of IRC server")
   parser.add_argument("--port", '-p', type=int, default=6667, help="Port of IRC server")
   parser.add_argument("--channel", '-c', type=str, help="Channel to join after connecting")
-  parser.add_argument("--channel_list", type=str, help="Path to a file that stores a list of channels to join")
+  parser.add_argument("--channel-list", type=str, dest='channel_list', help="Path to a file that stores a list of channels to join")
   parser.add_argument("--nickname", '-n', type=str, default="DontMindMe", help="Bot nickname")
-  parser.add_argument("--debug", '-d', action='store_true', help="Print debug messages")
-  parser.add_argument("--ns_password", action='store_true', help="Let the bot ask for the nickserv password on start")
+  parser.add_argument("--ns-password", action='store_true', help="Let the bot ask for the nickserv password on start")
   parser.add_argument("--secret", type=str, help="Sets the shared admin secret")
+  parser.add_argument("--log-level", type=str, default="INFO", dest='log_level', help="Sets the log level")
   args = parser.parse_args()
 
   nick = args.nickname
@@ -389,7 +370,28 @@ def main():
   channel = args.channel
   channel_list = args.channel_list
   secret = args.secret
-  DEBUG = args.debug
+  log_level = args.log_level
+
+  numeric_level = getattr(logging, log_level.upper(), None)
+  if not isinstance(numeric_level, int):
+    print('Invalid log level: %s' % loglevel)
+    sys.exit(-1)
+
+  # logging setup
+  logger = logging.getLogger("DontMindMe")
+  logger.setLevel(numeric_level)
+
+  fmt = logging.Formatter("%(asctime)s %(message)s")
+
+  fh = logging.FileHandler("dontmindme.log")
+  fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+  fh.setLevel(numeric_level)
+  logger.addHandler(fh)
+
+  sh = logging.StreamHandler()
+  sh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+  sh.setLevel(numeric_level)
+  logger.addHandler(sh)
 
   # handle auto join channels
   # can either be using the command line argument --channel
@@ -397,21 +399,21 @@ def main():
   # or both
   channels = set()
   if not channel and not channel_list:
-    print("You must define at least one channel to join!")
+    logger.error("You must define at least one channel to join!")
     sys.exit(-1)
 
   if channel_list:
     if os.path.exists(channel_list):
       channels = set([line.strip() for line in open(channel_list)])
     else:
-      print("File '" + channel_list + "' not found!")
+      logger.error("File '" + channel_list + "' not found!")
       sys.exit(-1)
  
   if channel:
     channels.add(channel)
 
   if len(channels) == 0:
-    print("You must define at least one channel to join!")
+    logger.error("You must define at least one channel to join!")
     sys.exit(-1)
 
   if args.ns_password:
@@ -419,11 +421,15 @@ def main():
 
   # disable utf-8 decoding of lines, irc is one messy char encoding place
   irc.client.ServerConnection.buffer_class = irc.client.LineBuffer
- 
-  print("Starting up flood protection ...")
-  debug_print("Server: " + server + ":" + str(port) + ", Channel: " + ', '.join(channels) + ", Nickname: " + nick)
-  bot = FloodBot(nick, server, port, channels, secret)
-  bot.start()
+  
+  logger.info("Starting up DontMindMe - IRC Flood Protection")
+  logger.debug("Server: " + server + ":" + str(port) + ", Channel: " + ', '.join(channels) + ", Nickname: " + nick)
+  bot = FloodBot(logger, nick, server, port, channels, secret)
+  try:
+    bot.start()
+  except KeyboardInterrupt:
+    logger.info("Application terminated, shutting down ...")
+    logging.shutdown()
 
 if __name__ == "__main__":
   main()
