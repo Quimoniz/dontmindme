@@ -271,7 +271,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       
       if cmd[1] == "list":
         if len(self.whitelist):
-          c.privmsg(nick, "Whitelist: " + ','.join(self.whitelist))
+          c.privmsg(nick, "Whitelist: " + ', '.join(self.whitelist))
         else:
           c.privmsg(nick, "Whitelist is empty")
         return
