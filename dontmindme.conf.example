@@ -1,0 +1,16 @@
+[core]
+# list of plugins to load at start
+plugins=nickserv,botcontrol,antispam
+
+# TODO no whitespace before any channel name or else
+# python thinks it's a comment
+channels=#myfirstchannel,#mysecondchannel
+
+# secret key for admin authentication
+# leave blank or remove to disable secret key authentication
+secret=ladida
+
+# example configuration for a plugin
+[nickserv]
+# this is the nickserv password the plugin will use
+password=my_secret_password

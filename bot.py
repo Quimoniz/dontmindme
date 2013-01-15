@@ -3,83 +3,43 @@
 import time, datetime
 import getpass
 import os
+import imp
 import logging
+import ConfigParser
 import irc.bot
 import irc.strings
 import irc.client
 from irc.dict import IRCDict
 
-MIN_SECONDS_BETWEEN_MESSAGES = 4  # minimal delay in seconds two messages should have
-WEBCHAT_MULTIPLIER = 1.5          # additional penalty for webchat users
-MAX_FLOOD_SCORE = 15              # maximum score a client can reach before being punished
+
+VERSION           = "DontMindMe - General Purpose IRC Bot (skyr.at)"
 NICKSERV_PASSWORD = ""            # if the bot's nick is registered, set its NickServ password here
                                   # can and should probably be set using command line arguments
 
+class PluginError(Exception):
+  def __init__(self, msg):
+    self.msg = msg
+
+  def __str__(self):
+    return repr(self.msg)
+
 class User(object):
-  def __init__(self, name, host):
-    self.name = name
-    self.last_message = None
-    self.similar_message_count = 0
-    self.flooding = False
-    self.last_message_time = 0
-    self.flood_score = 0
-    self.penalty_count = 0
-    
-    self.set_host(host)
+  def __init__(self, nick, host):
+    self.nick = nick
+    self.host = host
+
+  def get_nick(self):
+    return self.nick
+
+  def get_host(self):
+    return self.host
+
+  def get_host(self):
+    return self.host
 
   def set_host(self, host):
     self.host = host
     
-    self.uses_webchat = False
-    if self.host.startswith("gateway/web"):
-      self.uses_webchat = True
-
-  def update(self, message):
-    # a pause of a few seconds between messages keeps flood_score at 0
-    msg_length = len(message)
-    min_message_delay = MIN_SECONDS_BETWEEN_MESSAGES + (self.uses_webchat*2)
-    self.flood_score += (min_message_delay - (time.time() - self.last_message_time))
-
-    # additional penalty for long lines
-    self.flood_score += min(11, (msg_length/80)**1.7)
-    self.last_message_time = time.time()
-
-    if self.flood_score < 0:
-      self.flood_score = 0
-
-    # repeating messages increases flood_score
-    # this string comparison could be implemented as a levenshtein ratio
-    # to make it more robust against small text changes
-    if message == self.last_message:
-      self.similar_message_count += 1
-      self.flood_score *= (self.similar_message_count)
-    else:
-      self.similar_message_count = 0
-    
-    self.last_message = message
-
-    # webchat users are more likely to be evil
-    # proven by several studies
-    if self.uses_webchat:
-      self.flood_score *= WEBCHAT_MULTIPLIER
-
-    # TODO check for nazi scum catchphrases
-    # TODO Decrease flood score for registered users
-
-    # flood_score threshhold
-    if self.flood_score >= MAX_FLOOD_SCORE:
-      self.set_flooding(True)
-      self.penalty_count += 1
-      
-      # reset flood_score once a user is blamed
-      # to avoid keeping a user in jail repeatedly
-      self.flood_score = 0
-    else:
-      self.set_flooding(False)
-
-  def set_flooding(self, flag):
-    self.flooding = flag
-
 class Channel(irc.bot.Channel):
   def __init__(self):
     irc.bot.Channel.__init__(self)
@@ -105,16 +65,87 @@ class Channel(irc.bot.Channel):
     else:
       return None
 
-class FloodBot(irc.bot.SingleServerIRCBot):
-  def __init__(self, logger, nickname, server, port, channels, admin_secret = ""):
-    irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
-    self.logger = logger
-    self.autojoin_channels = channels
-    self.whitelist = set()
-    self.admins    = set()
-    self.admin_secret = admin_secret
+class Plugin(object):
+  def __init__(self, bot, name, long_name, author, desc):
+    self.bot = bot
+    self.name = name
+    self.long_name = long_name
+    self.author = author
+    self.description = desc
+    self.command_handler = {}
+    self.event_handler = {}
+    self.instance = None
 
-    self.logger.info("Auto joining channels: " + ', '.join(self.autojoin_channels))
+  def get_bot(self):
+    return self.bot
+
+  def get_description(self):
+    return self.description
+
+  def __str__(self):
+    return "%s - %s" % (self.long_name, self.author)
+
+  def get_config_value(self, key, default=""):
+    try:
+      return self.bot.config.get(self.name, key)
+    except (ConfigParser.NoSectionError, ConfigParser.NoOptionError) as e:
+      return default
+
+  def set_instance(self, instance):
+    self.instance = instance
+
+  def add_command_handler(self, command, handler):
+    self.command_handler[command] = handler
+
+  def add_event_handler(self, event, handler):
+    self.event_handler[event] = handler
+
+  def handle_command(self, conn, command, data):
+    self.command_handler[command[0]](conn, command[1:], data)
+
+  def handle_event(self, conn, event, data):
+    self.event_handler[event](conn, data)
+
+  def has_command_handler(self, cmd):
+    return cmd in self.command_handler
+
+  def has_event_handler(self, event):
+    return event in self.event_handler
+
+class FloodBot(irc.bot.SingleServerIRCBot):
+  def __init__(self, logger, config, nickname, server, port):
+    irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
+    self.logger             = logger
+    self.admins             = set()
+    self.plugins            = {}
+    self.config             = ConfigParser.ConfigParser()
+    self.admin_secret       = ""
+    self.autojoin_channels  = []
+
+    if config:
+      self.config.read(config)
+      self.autoload_plugins()
+
+      if self.config.has_option("core", "channels"):
+        self.autojoin_channels = self.config.get("core", "channels").split(",")
+
+      if self.config.has_option("core", "secret"):
+        self.admin_secret = self.config.get("core", "secret")
+
+    if len(self.autojoin_channels):
+      self.logger.info("Auto joining channels: " + ', '.join(self.autojoin_channels))
+
+  # tries to load the modules specified in the config file
+  def autoload_plugins(self):
+    try:
+      for plugin in self.config.get("core", "plugins").split(","):
+        try:
+          self.load_plugin(plugin.strip())
+        except PluginError, e:
+          # silently ignore PluginErrors and try to load the next one
+          pass
+    except (ConfigParser.NoSectionError, ConfigParser.NoOptionError) as e:
+      return
 
   # checks if a user is a channel op in one of our channels
   def is_user_admin(self, source):
@@ -127,9 +158,75 @@ class FloodBot(irc.bot.SingleServerIRCBot):
 
     return False
 
-  def identify(self, c):
-    self.logger.info("Identifying with NickServ ...")
-    c.privmsg("NickServ", "identify " + NICKSERV_PASSWORD)
+  # plugin management
+  def get_plugin_list(self):
+    return [x[:-3] for x in os.listdir("plugins") if os.path.splitext(x)[1].lower() == ".py" and x != "__init__.py"]
+
+  def load_plugin(self, plugin):
+    py_mod = imp.load_source(plugin, "plugins/%s.py" % (plugin))
+    py_mod.User = User
+
+    try:
+      plugin_class = py_mod.Plugin
+      self.plugins[plugin] = Plugin(self, plugin, plugin_class._name_, plugin_class._author_, plugin_class._description_)
+      self.plugins[plugin].set_instance(plugin_class(self.plugins[plugin]))
+    except AttributeError, e:
+      del self.plugins[plugin]
+      self.logger.exception("Error loading plugin '%s': " % (plugin))
+      raise PluginError("No class 'Plugin' found in plugin '%s'!" % (plugin,))
+    
+    self.logger.info("Successfully loaded plugin '%s'!" % (plugin))
+
+  def unload_plugin(self, plugin):
+    self.logger.info("Unloading plugin '%s'." % (plugin))
+    del self.plugins[plugin]
+
+  def plugin_handle_command(self, conn, cmd, data):
+    for name, plugin in self.plugins.items():
+      if plugin.has_command_handler(cmd[0]):
+
+        # run this encapsulated in a dirty catch-all try
+        # to prevent the bot from crashing when a plugin 
+        # is errornous and unload the plugin in case
+        try:
+          plugin.handle_command(conn, cmd, data)
+        except:
+          self.logger.exception("Error on running plugin command handler for '%s'!" % (cmd[0]))
+          self.unload_plugin(name)
+          raise PluginError("Error on running plugin command handler! Unloading plugin ...")
+
+        return True
+    return False
+
+  # this method does not return once a fitting handler is found
+  # to let more than one plugin handle things
+  def plugin_handle_event(self, conn, event, data):
+    for name, plugin in self.plugins.items():
+      if plugin.has_event_handler(event):
+        
+        # run this encapsulated in a dirty catch-all try
+        # to prevent the bot from crashing when a plugin 
+        # is errornous and unload the plugin in case
+        try:
+          plugin.handle_event(conn, event, data)
+        except:
+          self.logger.exception("Error on running plugin event handler for '%s'!" % (event))
+          self.unload_plugin(name)
+          raise PluginError("Error on running plugin command handler! Unloading plugin ...")
+
+    return False
+
+  # small helper function for !plugin load
+  def cmd_plugin_load(self, c, nick, plugin):
+    try:
+      self.load_plugin(plugin)
+    except (ImportError, PluginError) as e:
+      c.privmsg(nick, "Error loading plugin: %s" % (e,))
+    else:
+      c.privmsg(nick, "Loaded plugin '%s'!" % (plugin, ))
+
+  def get_channel(self, name):
+    return self.channels[name]
 
   # overwrite this to make use of our own Channel class
   def _on_join(self, c, e):
@@ -163,13 +260,17 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     c.nick(c.get_nickname() + "_")
 
   def on_join(self, c, e):
-    channel = e.target
-    nick = e.source.nick
- 
-    # Don't try to voice ourself
-    if nick == c.get_nickname():
+    try:
+      self.plugin_handle_event(c, "JOIN", e)
+    except PluginError, e:
       return
 
+  def on_part(self, c, e):
+    try:
+      self.plugin_handle_event(c, "PART", e)
+    except PluginError, e:
+      return
+  
   def on_pubmsg(self, c, e):
     channel_name = e.target
     
@@ -188,45 +289,19 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       self.logger.error("Unknown user: '" + nick + "'. I'm scared!")
       return
 
-    message = e.arguments[0].split(":", 1)
-
     if user.host == "":
       user.set_host(e.source.host)
-
-    # don't punish whitelisted users
-    if nick.lower() in self.whitelist:
-      return
     
-    user.update(message)
-
-    # user has been found flooding
-    if user.flooding:
-      self.logger.info("User '" + user.name + "' (" + user.host + ") is flooding!")
-      c.privmsg("ChanServ", "QUIET " + channel_name + " " + user.name)
-      user.set_flooding(False)
+    try:
+      self.plugin_handle_event(c, "PUBMSG", e)
+    except PluginError, e:
+      return
 
   def on_privnotice(self, c, e):
-    nick = e.source.nick
-
-    if nick.lower() not in ["nickserv", "chanserv"]:
+    try:
+      self.plugin_handle_event(c, "PRIVNOTICE", e)
+    except PluginError, e:
       return
-
-    # no NickServ password set means the nick isn't registered
-    if not NICKSERV_PASSWORD:
-      return
-
-    # extract message from arguments, strip and lower
-    msg = e.arguments[0].split(":", 1)[0].strip().lower()
-
-    # check for typical NickServ responses, kinda dirty
-    if "this nickname is registered." in msg:
-      self.identify(c)
-    elif "you are now identified" in msg:
-      self.logger.info("Succesfully registered!")
-    elif "invalid password" in msg:
-      self.logger.warning("Could not identify with NickServ!")
-    else:
-      self.logger.info("Unknown message from NickServ: '" + msg + "'")
 
   def on_privmsg(self, c, e):
     nick = e.source.nick
@@ -261,62 +336,72 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     self.logger.info("User '" + nick + "' (" + e.source + ") issued command: '" + msg + "'")
 
     # command parsing
-    cmd = msg.lower().split(" ")
+    cmd = msg.split(" ")
 
-    # whitelist management
-    if cmd[0] == "!whitelist":
+    # only lower the first part as this is the command
+    cmd[0] = cmd[0].lower()
+
+    if cmd[0] == "!plugin":
       if len(cmd) < 2:
-        c.privmsg(nick, "!whitelist add <nick>|del <nick>|list - Manage the bot's whitelist")
-        return
-      
-      if cmd[1] == "list":
-        if len(self.whitelist):
-          c.privmsg(nick, "Whitelist: " + ', '.join(self.whitelist))
-        else:
-          c.privmsg(nick, "Whitelist is empty")
+        c.privmsg(nick, "!plugin load <name>|unload <name>|info <name|list - Manage the bot's plugins")
         return
 
-      if len(cmd) < 3:
-        return
-      
-      target = cmd[2]
-      
-      if cmd[1] == "add":
-        self.whitelist.add(target)
-        c.privmsg(nick, "User '" + target + "' added to whitelist")
-      elif cmd[1] == "del":
-        if target in self.whitelist:
-          self.whitelist.remove(target)
-          c.privmsg(nick, "User '" + target + "' removed from whitelist")
-        else:
-          c.privmsg(nick, "User '" + target + "' not on whitelist")
-    
-    # let the bot join a channel
-    elif cmd[0] == "!join":
-      if len(cmd) < 2:
-        c.privmsg(nick, "!join <#channel> - Tell the bot to join a certain channel")
-        return
-      
-      c.join(cmd[1])
+      if len(cmd) == 2:
+        if cmd[1] == "list":
+          plugin_list = [x if x not in self.plugins else x + "*" for x in self.get_plugin_list() ]
+          c.privmsg(nick, "Plugins: %s" % (', '.join(plugin_list)))
+      elif len(cmd) == 3:
+        if cmd[1] == "load":
+          plugin = cmd[2]
+          if plugin in self.plugins:
+            c.privmsg(nick, "This plugin is already running.")
+            return
 
-    # let the bot leave a channel
-    elif cmd[0] == "!part":
-      if len(cmd) < 2:
-        c.privmsg(nick, "!part <#channel> - Tell the bot to part a certain channel")
-        return
-      
-      c.part(cmd[1])
+          if plugin not in self.get_plugin_list():
+            c.privmsg(nick, "No such plugin '%s'!" % (plugin,))
+            return
 
-    # change the bot's nick
-    elif cmd[0] == "!nick":
-      if len(cmd) < 2:
-        c.privmsg(nick, "!nick <nickname> - Change the bot's nickname")
+          self.cmd_plugin_load(c, nick, plugin)
+
+        elif cmd[1] == "unload":
+          plugin = cmd[2]
+          if plugin not in self.plugins:
+            c.privmsg(nick, "This plugin is not running.")
+            return
+
+          self.unload_plugin(plugin)
+
+        elif cmd[1] == "reload":
+          plugin = cmd[2]
+          if plugin not in self.plugins:
+            c.privmsg(nick, "This plugin is not running.")
+            return
+         
+          self.unload_plugin(plugin)
+          self.cmd_plugin_load(c, nick, plugin)
+
+        elif cmd[1] == "info":
+          plugin = cmd[2]
+
+          if plugin not in self.plugins:
+            c.privmsg(nick, "Plugin has to be running first.")
+            return
+
+          c.privmsg(nick, str(self.plugins[plugin]))
+          c.privmsg(nick, self.plugins[plugin].get_description())
+
+      return
+
+    # run plugin handlers and return in case one has been found
+    try:
+      if self.plugin_handle_command(c, cmd, e):
         return
-      
-      c.nick(cmd[1])
+    except PluginError, e:
+      c.privmsg(nick, str(e))
+      return
 
     # admin management
-    elif cmd[0] == "!admin":
+    if cmd[0] == "!admin":
       if len(cmd) < 2:
         c.privmsg(nick, "!admin list|remove <hostmask>|purge - Manage administrators")
         return
@@ -346,7 +431,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
   # the default method causes the bot to crash on my server
   # Overwriting this is a good idea anyway
   def get_version(self):
-    return "DontMindMe - Flood Protection Bot (skyr.at)"
+    return VERSION 
 
 def main():
   global NICKSERV_PASSWORD
@@ -356,21 +441,16 @@ def main():
   parser = argparse.ArgumentParser(description='A basic flood protection bot.')
   parser.add_argument("--server", '-s', type=str, required=True, help="Address of IRC server")
   parser.add_argument("--port", '-p', type=int, default=6667, help="Port of IRC server")
-  parser.add_argument("--channel", '-c', type=str, help="Channel to join after connecting")
-  parser.add_argument("--channel-list", type=str, dest='channel_list', help="Path to a file that stores a list of channels to join")
   parser.add_argument("--nickname", '-n', type=str, default="DontMindMe", help="Bot nickname")
-  parser.add_argument("--ns-password", action='store_true', help="Let the bot ask for the nickserv password on start")
-  parser.add_argument("--secret", type=str, help="Sets the shared admin secret")
   parser.add_argument("--log-level", type=str, default="INFO", dest='log_level', help="Sets the log level")
+  parser.add_argument("--config", "-c", type=str, default="", help="Path to the bot's config file")
   args = parser.parse_args()
 
   nick = args.nickname
   server = args.server
   port = args.port
-  channel = args.channel
-  channel_list = args.channel_list
-  secret = args.secret
   log_level = args.log_level
+  config = args.config
 
   numeric_level = getattr(logging, log_level.upper(), None)
   if not isinstance(numeric_level, int):
@@ -378,53 +458,27 @@ def main():
     sys.exit(-1)
 
   # logging setup
-  logger = logging.getLogger("DontMindMe")
+  logger = logging.getLogger("Core")
   logger.setLevel(numeric_level)
 
   fmt = logging.Formatter("%(asctime)s %(message)s")
 
   fh = logging.FileHandler("dontmindme.log")
-  fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+  fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s::%(levelname)s] %(message)s"))
   fh.setLevel(numeric_level)
   logger.addHandler(fh)
 
   sh = logging.StreamHandler()
-  sh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+  sh.setFormatter(logging.Formatter("%(asctime)s [%(name)s::%(levelname)s] %(message)s"))
   sh.setLevel(numeric_level)
   logger.addHandler(sh)
 
-  # handle auto join channels
-  # can either be using the command line argument --channel
-  # or by specifying the path to a file containing a list of channels, newline seperated
-  # or both
-  channels = set()
-  if not channel and not channel_list:
-    logger.error("You must define at least one channel to join!")
-    sys.exit(-1)
-
-  if channel_list:
-    if os.path.exists(channel_list):
-      channels = set([line.strip() for line in open(channel_list)])
-    else:
-      logger.error("File '" + channel_list + "' not found!")
-      sys.exit(-1)
- 
-  if channel:
-    channels.add(channel)
-
-  if len(channels) == 0:
-    logger.error("You must define at least one channel to join!")
-    sys.exit(-1)
-
-  if args.ns_password:
-    NICKSERV_PASSWORD = getpass.getpass("NickServ password: ")
-
-  # disable utf-8 decoding of lines, irc is one messy char encoding place
+  # disable utf-8 decoding of lines, irc is one messy char encoding hell
   irc.client.ServerConnection.buffer_class = irc.client.LineBuffer
   
   logger.info("Starting up DontMindMe - IRC Flood Protection")
-  logger.debug("Server: " + server + ":" + str(port) + ", Channel: " + ', '.join(channels) + ", Nickname: " + nick)
-  bot = FloodBot(logger, nick, server, port, channels, secret)
+  logger.debug("Server: " + server + ":" + str(port) + ", Nickname: " + nick)
+  bot = FloodBot(logger, config, nick, server, port)
   try:
     bot.start()
   except KeyboardInterrupt:
