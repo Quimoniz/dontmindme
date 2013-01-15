@@ -11,10 +11,7 @@ import irc.strings
 import irc.client
 from irc.dict import IRCDict
 
-
-VERSION           = "DontMindMe - General Purpose IRC Bot (skyr.at)"
-NICKSERV_PASSWORD = ""            # if the bot's nick is registered, set its NickServ password here
-                                  # can and should probably be set using command line arguments
+CTCP_VERSION           = "DontMindMe - General Purpose IRC Bot (skyr.at)"
 
 class PluginError(Exception):
   def __init__(self, msg):
@@ -65,6 +62,7 @@ class Channel(irc.bot.Channel):
     else:
       return None
 
+# Plugin class
 class Plugin(object):
   def __init__(self, bot, name, long_name, author, desc):
     self.bot = bot
@@ -162,6 +160,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
   def get_plugin_list(self):
     return [x[:-3] for x in os.listdir("plugins") if os.path.splitext(x)[1].lower() == ".py" and x != "__init__.py"]
 
+  # dynamically imports a python file
   def load_plugin(self, plugin):
     py_mod = imp.load_source(plugin, "plugins/%s.py" % (plugin))
     py_mod.User = User
@@ -256,16 +255,19 @@ class FloodBot(irc.bot.SingleServerIRCBot):
         # there's no hostmask on the NAMES list
         self.channels[ch].add_user(nick, "")
 
+  # automatically append an underscore when the desired nickname is in use
   def on_nicknameinuse(self, c, e):
     c.nick(c.get_nickname() + "_")
 
   def on_join(self, c, e):
+    # run JOIN event
     try:
       self.plugin_handle_event(c, "JOIN", e)
     except PluginError, e:
       return
 
   def on_part(self, c, e):
+    # run PART event
     try:
       self.plugin_handle_event(c, "PART", e)
     except PluginError, e:
@@ -286,18 +288,22 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     # but it does on servers with specific channel owner mode ("~")
     # this probably is a bug in python-irc
     if user == None:
-      self.logger.error("Unknown user: '" + nick + "'. I'm scared!")
+      self.logger.error("Unknown user: '%s'. I'm scared!" % (nick))
       return
 
+    # when we join a channel, we don't have the host of users already in there
+    # so we update this once they say something
     if user.host == "":
       user.set_host(e.source.host)
     
+    # run PUBMSG event
     try:
       self.plugin_handle_event(c, "PUBMSG", e)
     except PluginError, e:
       return
 
   def on_privnotice(self, c, e):
+    # run PRIVNOTICE event
     try:
       self.plugin_handle_event(c, "PRIVNOTICE", e)
     except PluginError, e:
@@ -329,13 +335,14 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       
       return
 
+    # only allow admins to issue commands
+    # log unauthorized tries
     if not self.is_user_admin(e.source):
       self.logger.warning("Unauthorized command by user '" + nick + "' (" + e.source + ")")
       return False
     
     self.logger.info("User '" + nick + "' (" + e.source + ") issued command: '" + msg + "'")
 
-    # command parsing
     cmd = msg.split(" ")
 
     # only lower the first part as this is the command
@@ -392,16 +399,8 @@ class FloodBot(irc.bot.SingleServerIRCBot):
 
       return
 
-    # run plugin handlers and return in case one has been found
-    try:
-      if self.plugin_handle_command(c, cmd, e):
-        return
-    except PluginError, e:
-      c.privmsg(nick, str(e))
-      return
-
     # admin management
-    if cmd[0] == "!admin":
+    elif cmd[0] == "!admin":
       if len(cmd) < 2:
         c.privmsg(nick, "!admin list|remove <hostmask>|purge - Manage administrators")
         return
@@ -424,6 +423,14 @@ class FloodBot(irc.bot.SingleServerIRCBot):
           else:
             c.privmsg(nick, "No such hostmask on the admin list: '" + cmd[2] + "'")
 
+    # run plugin handlers and return in case one has been found
+    try:
+      if self.plugin_handle_command(c, cmd, e):
+        return
+    except PluginError, e:
+      c.privmsg(nick, str(e))
+      return
+
   def on_welcome(self, c, e):
     for channel in self.autojoin_channels:
       c.join(channel)
@@ -431,10 +438,9 @@ class FloodBot(irc.bot.SingleServerIRCBot):
   # the default method causes the bot to crash on my server
   # Overwriting this is a good idea anyway
   def get_version(self):
-    return VERSION 
+    return CTCP_VERSION
 
 def main():
-  global NICKSERV_PASSWORD
   import argparse
   import sys
 
@@ -476,9 +482,10 @@ def main():
   # disable utf-8 decoding of lines, irc is one messy char encoding hell
   irc.client.ServerConnection.buffer_class = irc.client.LineBuffer
   
-  logger.info("Starting up DontMindMe - IRC Flood Protection")
+  logger.info("Starting up DontMindMe.")
   logger.debug("Server: " + server + ":" + str(port) + ", Nickname: " + nick)
   bot = FloodBot(logger, config, nick, server, port)
+
   try:
     bot.start()
   except KeyboardInterrupt:
