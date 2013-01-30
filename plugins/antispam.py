@@ -33,6 +33,9 @@ class Plugin(object):
     self.plugin.add_event_handler("PUBMSG", self.pubmsg_handler)
 
     self.whitelist = set()
+    if self.plugin.get_config_value("whitelist"):
+      self.whitelist = set([x.strip() for x in self.plugin.get_config_value("whitelist").split(",")])
+      logger.info("Loaded whitelist from config file: %s" % (', '.join(self.whitelist)))
 
   def antispam_handler(self, conn, params, data):
     nick = data.source.nick
@@ -115,7 +118,7 @@ class Plugin(object):
 
       # check if users is connected via freenode webchat
       if user.get_host().startswith("gateway/web"):
-        user.plugin_antispam.uses_webchat = True
+        user.plugin_antispam[channel_name].uses_webchat = True
 
     if user.nick in self.whitelist:
       return
@@ -123,7 +126,7 @@ class Plugin(object):
     self.update(user.plugin_antispam[channel_name], message)
 
     if user.plugin_antispam[channel_name].flooding:
-      logger.info("User '%s' (%s) is spamming!" % (user.get_nick(), user.get_host()))
+      logger.info("User '%s' (%s, %s) is spamming!" % (user.get_nick(), user.get_host(), channel_name))
 
       if self.active:
         conn.privmsg("ChanServ", "QUIET " + channel_name + " " + user.get_nick())
