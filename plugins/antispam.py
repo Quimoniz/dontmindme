@@ -24,9 +24,20 @@ class Plugin(object):
   def __init__(self, plugin):
     self.plugin = plugin
     self.plugin.add_command_handler("!whitelist", self.whitelist_handler)
+    self.plugin.add_command_handler("!unquiet", self.unquiet_handler)
     self.plugin.add_event_handler("PUBMSG", self.pubmsg_handler)
 
     self.whitelist = set()
+
+  def unquiet_handler(self, conn, params, data):
+    nick = data.source.nick
+
+    if len(params) != 2:
+      conn.privmsg(nick, "!unquiet <channel> <hostmask> - Let's a previously punished user talk again")
+      return
+   
+    conn.privmsg(nick, "Trying to unquiet %s ..." % (params[1]))
+    conn.privmsg("ChanServ", "UNQUIET " + params[0] + " " + params[1])
 
   def whitelist_handler(self, conn, params, data):
     nick = data.source.nick

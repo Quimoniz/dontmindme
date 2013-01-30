@@ -20,6 +20,13 @@ class PluginError(Exception):
   def __str__(self):
     return repr(self.msg)
 
+class BotError(Exception):
+  def __init__(self, msg):
+    self.msg = msg
+
+  def __str__(self):
+    return repr(self.msg)
+
 class User(object):
   def __init__(self, nick, host):
     self.nick = nick
@@ -121,7 +128,9 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     self.autojoin_channels  = []
 
     if config:
-      self.config.read(config)
+      if config not in self.config.read(config):
+        raise BotError("Could not read configuration file '%s'!" % (config))
+
       self.autoload_plugins()
 
       if self.config.has_option("core", "channels"):
@@ -479,15 +488,28 @@ def main():
   sh.setLevel(numeric_level)
   logger.addHandler(sh)
 
+  # no config file supplied, look for one
+  if not config:
+    if os.path.exists("dontmindme.conf"):
+      config = "dontmindme.conf"
+    elif os.path.exists("/etc/dontmindme.conf"):
+      config = "/etc/dontmindme.conf"
+    else:
+      logger.error("No config file found, quitting!")
+      sys.exit(-1)
+
   # disable utf-8 decoding of lines, irc is one messy char encoding hell
   irc.client.ServerConnection.buffer_class = irc.client.LineBuffer
   
   logger.info("Starting up DontMindMe.")
   logger.debug("Server: " + server + ":" + str(port) + ", Nickname: " + nick)
-  bot = FloodBot(logger, config, nick, server, port)
 
   try:
+    bot = FloodBot(logger, config, nick, server, port)
     bot.start()
+  except BotError, e:
+    logger.exception("Bot Error: ")
+    logging.shutdown()
   except KeyboardInterrupt:
     logger.info("Application terminated, shutting down ...")
     logging.shutdown()
