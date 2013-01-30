@@ -66,7 +66,10 @@ class Plugin(object):
 
     # inject anti spam data into new users
     if not hasattr(user, "plugin_antispam"):
-      user.plugin_antispam = AntiSpamData()
+      user.plugin_antispam = {}
+      
+    if channel_name not in user.plugin_antispam:
+      user.plugin_antispam[channel_name] = AntiSpamData()
 
       # check if users is connected via freenode webchat
       if user.get_host().startswith("gateway/web"):
@@ -75,12 +78,12 @@ class Plugin(object):
     if user.nick in self.whitelist:
       return
 
-    self.update(user.plugin_antispam, message)
+    self.update(user.plugin_antispam[channel_name], message)
 
-    if user.plugin_antispam.flooding:
+    if user.plugin_antispam[channel_name].flooding:
       logger.info("User '%s' (%s) is spamming!" % (user.get_nick(), user.get_host()))
       conn.privmsg("ChanServ", "QUIET " + channel_name + " " + user.get_nick())
-      user.plugin_antispam.flooding = False
+      user.plugin_antispam[channel_name].flooding = False
 
   def update(self, user, message):
     # a pause of a few seconds between messages keeps flood_score at 0
