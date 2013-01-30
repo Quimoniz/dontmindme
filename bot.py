@@ -179,7 +179,8 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       self.plugins[plugin] = Plugin(self, plugin, plugin_class._name_, plugin_class._author_, plugin_class._description_)
       self.plugins[plugin].set_instance(plugin_class(self.plugins[plugin]))
     except AttributeError, e:
-      del self.plugins[plugin]
+      if plugin in self.plugins:
+        del self.plugins[plugin]
       self.logger.exception("Error loading plugin '%s': " % (plugin))
       raise PluginError("No class 'Plugin' found in plugin '%s'!" % (plugin,))
     
@@ -437,7 +438,7 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       if self.plugin_handle_command(c, cmd, e):
         return
     except PluginError, e:
-      c.privmsg(nick, str(e))
+      c.privmsg(nick, e.msg)
       return
 
   def on_welcome(self, c, e):

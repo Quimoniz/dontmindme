@@ -23,11 +23,42 @@ class Plugin(object):
 
   def __init__(self, plugin):
     self.plugin = plugin
+    self.active = True
+
     self.plugin.add_command_handler("!whitelist", self.whitelist_handler)
+    self.plugin.add_command_handler("!quiet", self.quiet_handler)
     self.plugin.add_command_handler("!unquiet", self.unquiet_handler)
+    self.plugin.add_command_handler("!antispam", self.antispam_handler)
+
     self.plugin.add_event_handler("PUBMSG", self.pubmsg_handler)
 
     self.whitelist = set()
+
+  def antispam_handler(self, conn, params, data):
+    nick = data.source.nick
+
+    if len(params) != 1:
+      conn.privmsg(nick, "!antispam on|off - Activate/Deactivate the automatic spam control")
+      return
+
+    if params[0].lower() == "on":
+      self.active = True
+      conn.privmsg(nick, "Activated automatic flood protection!")
+    elif params[0].lower() == "off":
+      self.active = False
+      conn.privmsg(nick, "Deactivated automatic flood protection!")
+    else:
+      conn.privmsg("Use 'on' or 'off'!")
+
+  def quiet_handler(self, conn, params, data):
+    nick = data.source.nick
+
+    if len(params) != 2:
+      conn.privmsg(nick, "!quiet <channel> <hostmask> - Silence a user in a channel")
+      return
+   
+    conn.privmsg(nick, "Trying to quiet %s ..." % (params[1]))
+    conn.privmsg("ChanServ", "QUIET " + params[0] + " " + params[1])
 
   def unquiet_handler(self, conn, params, data):
     nick = data.source.nick
@@ -93,7 +124,10 @@ class Plugin(object):
 
     if user.plugin_antispam[channel_name].flooding:
       logger.info("User '%s' (%s) is spamming!" % (user.get_nick(), user.get_host()))
-      conn.privmsg("ChanServ", "QUIET " + channel_name + " " + user.get_nick())
+
+      if self.active:
+        conn.privmsg("ChanServ", "QUIET " + channel_name + " " + user.get_nick())
+
       user.plugin_antispam[channel_name].flooding = False
 
   def update(self, user, message):
