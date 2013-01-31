@@ -460,6 +460,7 @@ def main():
   parser.add_argument("--nickname", '-n', type=str, default="DontMindMe", help="Bot nickname")
   parser.add_argument("--log-level", type=str, default="INFO", dest='log_level', help="Sets the log level")
   parser.add_argument("--config", "-c", type=str, default="", help="Path to the bot's config file")
+  parser.add_argument("--stdout", action="store_true", help="Print log to stdout")
   args = parser.parse_args()
 
   nick = args.nickname
@@ -467,6 +468,7 @@ def main():
   port = args.port
   log_level = args.log_level
   config = args.config
+  stdout = args.stdout
 
   numeric_level = getattr(logging, log_level.upper(), None)
   if not isinstance(numeric_level, int):
@@ -484,10 +486,11 @@ def main():
   fh.setLevel(numeric_level)
   logger.addHandler(fh)
 
-  sh = logging.StreamHandler()
-  sh.setFormatter(logging.Formatter("%(asctime)s [%(name)s::%(levelname)s] %(message)s"))
-  sh.setLevel(numeric_level)
-  logger.addHandler(sh)
+  if stdout:
+    sh = logging.StreamHandler()
+    sh.setFormatter(logging.Formatter("%(asctime)s [%(name)s::%(levelname)s] %(message)s"))
+    sh.setLevel(numeric_level)
+    logger.addHandler(sh)
 
   # no config file supplied, look for one
   if not config:
