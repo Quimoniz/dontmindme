@@ -111,6 +111,14 @@ class Plugin(object):
   def handle_event(self, conn, event, data):
     self.event_handler[event](conn, data)
 
+  def handle_help(self, conn, event):
+    if not hasattr(self.instance, "_help_"):
+      conn.privmsg(event.source.nick, "No help available for this module!")
+      return
+
+    for line in self.instance._help_.split("\n"):
+      conn.privmsg(event.source.nick, line)
+
   def has_command_handler(self, cmd):
     return cmd in self.command_handler
 
@@ -408,6 +416,15 @@ class FloodBot(irc.bot.SingleServerIRCBot):
           c.privmsg(nick, self.plugins[plugin].get_description())
 
       return
+
+    elif cmd[0] == "!help":
+      if len(cmd) < 2:
+        c.privmsg(nick, CTCP_VERSION)
+        c.privmsg(nick, "For help on a certain plugin, use !help <plugin>.")
+        c.privmsg(nick, "Available core commands: !plugin, !admin, !secret")
+      else:
+        if cmd[1] in self.plugins:
+          self.plugins[cmd[1]].handle_help(c, e)
 
     # admin management
     elif cmd[0] == "!admin":

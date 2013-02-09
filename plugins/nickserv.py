@@ -6,6 +6,7 @@ class Plugin(object):
   _name_ = "NickServ"
   _author_ = "Fabian Schlager"
   _description_ = "Handles NickServ authentication"
+  _help_ = "NickServ - This plugin handles authentication with NickServ. No commands are available."
 
   def __init__(self, plugin):
     self.plugin = plugin

@@ -1,9 +1,9 @@
 import logging
 
-logger = logging.getLogger("Core.BotControl")
+logger = logging.getLogger("Core.Stats")
 
 class Plugin(object):
-  _name_ = "BotControl"
+  _name_ = "Statistics"
   _author_ = "Fabian Schlager"
   _description_ = "Basic bot control commands such as !join, !part, ..."
 
@@ -13,10 +13,6 @@ class Plugin(object):
     self.plugin.add_command_handler("!join", self.join_handler)
     self.plugin.add_command_handler("!part", self.part_handler)
     self.plugin.add_command_handler("!nick", self.nick_handler)
-    self.plugin.add_command_handler("!channels", self.channels_handler)
-
-  def channels_handler(self, conn, params, data):
-    conn.privmsg(data.source.nick, "Current channels: %s" % (", ".join(self.plugin.bot.channels)))
 
   def join_handler(self, conn, params, data):
     if len(params) != 1:
