@@ -1,11 +1,14 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python
 
 import time, datetime
 import getpass
 import os
 import imp
 import logging
+import logging.handlers
 import ConfigParser
+import daemon
+import pidfile
 import irc.bot
 import irc.strings
 import irc.client
@@ -127,7 +130,6 @@ class Plugin(object):
 
 class FloodBot(irc.bot.SingleServerIRCBot):
   def __init__(self, logger, config, nickname, server, port):
-    irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
     self.logger             = logger
     self.admins             = set()
     self.plugins            = {}
@@ -147,8 +149,22 @@ class FloodBot(irc.bot.SingleServerIRCBot):
       if self.config.has_option("core", "secret"):
         self.admin_secret = self.config.get("core", "secret")
 
+      if self.config.has_option("core", "server"):
+        server = self.config.get("core", "server")
+      
+      if self.config.has_option("core", "port"):
+        port = int(self.config.get("core", "port"))
+      
+      if self.config.has_option("core", "nickname"):
+        nickname = self.config.get("core", "nickname")
+
     if len(self.autojoin_channels):
       self.logger.info("Auto joining channels: " + ', '.join(self.autojoin_channels))
+  
+    logger.info("Starting up DontMindMe.")
+    logger.debug("Server: " + server + ":" + str(port) + ", Nickname: " + nick)
+
+    irc.bot.SingleServerIRCBot.__init__(self, [(server, port)], nickname, nickname)
 
   # tries to load the modules specified in the config file
   def autoload_plugins(self):
@@ -472,25 +488,8 @@ class FloodBot(irc.bot.SingleServerIRCBot):
     super(FloodBot, self)._on_disconnect(c, e)
 
 
-def main():
-  import argparse
+def main(nick, server, port, log_level, config, stdout):
   import sys
-
-  parser = argparse.ArgumentParser(description='A basic flood protection bot.')
-  parser.add_argument("--server", '-s', type=str, required=True, help="Address of IRC server")
-  parser.add_argument("--port", '-p', type=int, default=6667, help="Port of IRC server")
-  parser.add_argument("--nickname", '-n', type=str, default="DontMindMe", help="Bot nickname")
-  parser.add_argument("--log-level", type=str, default="INFO", dest='log_level', help="Sets the log level")
-  parser.add_argument("--config", "-c", type=str, default="", help="Path to the bot's config file")
-  parser.add_argument("--stdout", action="store_true", help="Print log to stdout")
-  args = parser.parse_args()
-
-  nick = args.nickname
-  server = args.server
-  port = args.port
-  log_level = args.log_level
-  config = args.config
-  stdout = args.stdout
 
   numeric_level = getattr(logging, log_level.upper(), None)
   if not isinstance(numeric_level, int):
@@ -498,21 +497,21 @@ def main():
     sys.exit(-1)
 
   # logging setup
-  logger = logging.getLogger("Core")
+  logger = logging.getLogger("DontMindMe")
   logger.setLevel(numeric_level)
 
   fmt = logging.Formatter("%(asctime)s %(message)s")
-
-  fh = logging.FileHandler("dontmindme.log")
-  fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s::%(levelname)s] %(message)s"))
-  fh.setLevel(numeric_level)
-  logger.addHandler(fh)
 
   if stdout:
     sh = logging.StreamHandler()
     sh.setFormatter(logging.Formatter("%(asctime)s [%(name)s::%(levelname)s] %(message)s"))
     sh.setLevel(numeric_level)
     logger.addHandler(sh)
+  else:
+    fh = logging.handlers.SysLogHandler(address="/dev/log", facility=logging.handlers.SysLogHandler.LOG_DAEMON)
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s::%(levelname)s] %(message)s"))
+    fh.setLevel(numeric_level)
+    logger.addHandler(fh)
 
   # no config file supplied, look for one
   if not config:
@@ -522,14 +521,13 @@ def main():
       config = "/etc/dontmindme.conf"
     else:
       logger.error("No config file found, quitting!")
+      open("/tmp/noconfig", "a").close()
       sys.exit(-1)
 
   # disable utf-8 decoding of lines, irc is one messy char encoding hell
   irc.client.ServerConnection.buffer_class = irc.client.LineBuffer
   
-  logger.info("Starting up DontMindMe.")
-  logger.debug("Server: " + server + ":" + str(port) + ", Nickname: " + nick)
-
+  
   try:
     bot = FloodBot(logger, config, nick, server, port)
     bot.start()
@@ -541,4 +539,27 @@ def main():
     logging.shutdown()
 
 if __name__ == "__main__":
-  main()
+  import argparse
+
+  parser = argparse.ArgumentParser(description='A basic flood protection bot.')
+  parser.add_argument("--server", '-s', type=str, default=None, help="Address of IRC server")
+  parser.add_argument("--port", '-p', type=int, default=6667, help="Port of IRC server")
+  parser.add_argument("--nickname", '-n', type=str, default="DontMindMe", help="Bot nickname")
+  parser.add_argument("--log-level", type=str, default="INFO", dest='log_level', help="Sets the log level")
+  parser.add_argument("--config", "-c", type=str, default="", help="Path to the bot's config file")
+  parser.add_argument("--stdout", action="store_true", help="Print log to stdout")
+  parser.add_argument("--foreground", action="store_true", help="Don't daemonize")
+  args = parser.parse_args()
+
+  nick = args.nickname
+  server = args.server
+  port = args.port
+  log_level = args.log_level
+  config = args.config
+  stdout = args.stdout
+
+  if args.foreground:
+    main(nick, server, port, log_level, config, stdout)
+  else:
+    with daemon.DaemonContext(pidfile=pidfile.PidFile("/var/run/dontmindme.pid"), uid=1006, gid=1006):
+      main(nick, server, port, log_level, config, stdout)
