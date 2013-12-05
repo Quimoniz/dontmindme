@@ -467,6 +467,11 @@ class FloodBot(irc.bot.SingleServerIRCBot):
   def get_version(self):
     return CTCP_VERSION
 
+  def _on_disconnect(self, c, e):
+    self.logger.info("Disconnected, attempting to reconnect ...")
+    super(FloodBot, self)._on_disconnect(c, e)
+
+
 def main():
   import argparse
   import sys

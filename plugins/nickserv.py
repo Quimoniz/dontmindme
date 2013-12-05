@@ -18,6 +18,7 @@ class Plugin(object):
 
     # only accept NickServ notices
     if nick.lower() != "nickserv":
+      logger.debug("Got notice from %s: '%s'!" % (nick, data.arguments[0].split(":", 1)[0].strip().lower())) 
       return
 
     # no NickServ password set means the nick isn't registered
